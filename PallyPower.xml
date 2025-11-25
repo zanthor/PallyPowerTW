@@ -95,6 +95,12 @@
 			<OnClick>
 				PallyPowerPlayerButton_OnClick(this, arg1);
 			</OnClick>
+			<OnEnter>
+				PallyPowerPlayerButton_OnEnter(this);
+			</OnEnter>
+			<OnLeave>
+				PallyPowerPlayerButton_OnLeave(this);
+			</OnLeave>
 			<OnMouseWheel>
 				PallyPowerPlayerButton_OnMouseWheel(this, arg1);
 			</OnMouseWheel>

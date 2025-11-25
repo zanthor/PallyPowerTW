@@ -951,6 +951,40 @@ function PallyPowerPlayerButton_OnClick(plbtn, mouseBtn)
     end
 end
 
+function PallyPowerPlayerButton_OnLeave(plbtn)
+    GameTooltip:Hide()
+end
+
+function PallyPowerPlayerButton_OnEnter(plbtn)
+    if not plbtn then return end
+    
+    local btnName = plbtn:GetName()
+    if not btnName then return end
+    
+    -- Parse button name: PallyPowerFrameClassGroup#PlayerButton#
+    local _, _, class, pnum = string.find(btnName, "PallyPowerFrameClassGroup(.+)PlayerButton(.+)")
+    if not class then return end
+    
+    local classIndex = tonumber(class) - 1 -- class 0 == button 1
+    local playerName = getglobal(btnName .. "Text"):GetText()
+    if not playerName then return end
+    
+    -- Get the current player's blessing assignments
+    local currentPlayer = UnitName("player")
+    if not currentPlayer or not PallyPower_NormalAssignments[currentPlayer] then return end
+    
+    local assignments = PallyPower_NormalAssignments[currentPlayer][classIndex]
+    if not assignments or not assignments[playerName] then return end
+    
+    local blessingIndex = assignments[playerName]
+    if blessingIndex >= 0 and PallyPower_BlessingID[blessingIndex] then
+        local spellName = "Blessing of " .. PallyPower_BlessingID[blessingIndex]
+        GameTooltip:SetOwner(plbtn, "ANCHOR_RIGHT")
+        GameTooltip:SetText(spellName, 1, 1, 1)
+        GameTooltip:Show()
+    end
+end
+
 function PallyPower_UpdateLayout()
     local addAura = 0
     local addHeight = 0
@@ -1969,9 +2003,60 @@ function PallyPowerGridButton_OnClick(btn, mouseBtn)
 end
 
 function PallyPowerGridButton_OnLeave(btn)
+    GameTooltip:Hide()
 end
 
 function PallyPowerGridButton_OnEnter(btn)
+    local btnName = btn:GetName()
+    if not btnName then return end
+    
+    -- Parse button name: PallyPowerFramePlayer#Class# or PallyPowerFramePlayer#ClassA/S
+    local _, _, pnum, class = string.find(btnName, "PallyPowerFramePlayer(.+)Class(.+)")
+    if not class then return end
+    
+    local spellName = nil
+    
+    -- Check if it's an Aura assignment (ClassA)
+    if class == "A" then
+        -- Get the paladin name from the row
+        local pallyName = getglobal("PallyPowerFramePlayer" .. pnum .. "Name"):GetText()
+        if pallyName and PallyPower_AuraAssignments[pallyName] then
+            local auraIndex = PallyPower_AuraAssignments[pallyName]
+            if auraIndex >= 0 and PallyPower_AuraID[auraIndex] then
+                spellName = PallyPower_AuraID[auraIndex] .. " Aura"
+            end
+        end
+    -- Check if it's a Seal assignment (ClassS)
+    elseif class == "S" then
+        -- Get the paladin name from the row
+        local pallyName = getglobal("PallyPowerFramePlayer" .. pnum .. "Name"):GetText()
+        if pallyName and PallyPower_SealAssignments[pallyName] then
+            local sealIndex = PallyPower_SealAssignments[pallyName]
+            if sealIndex >= 0 and PallyPower_SealID[sealIndex] then
+                spellName = "Seal of " .. PallyPower_SealID[sealIndex]
+            end
+        end
+    -- It's a Blessing assignment (Class0-9)
+    else
+        local classIndex = tonumber(class)
+        if classIndex then
+            -- Get the paladin name from the row
+            local pallyName = getglobal("PallyPowerFramePlayer" .. pnum .. "Name"):GetText()
+            if pallyName and PallyPower_Assignments[pallyName] and PallyPower_Assignments[pallyName][classIndex] then
+                local blessingIndex = PallyPower_Assignments[pallyName][classIndex]
+                if blessingIndex >= 0 and PallyPower_BlessingID[blessingIndex] then
+                    spellName = "Blessing of " .. PallyPower_BlessingID[blessingIndex]
+                end
+            end
+        end
+    end
+    
+    -- Show tooltip if we found a spell name
+    if spellName then
+        GameTooltip:SetOwner(btn, "ANCHOR_RIGHT")
+        GameTooltip:SetText(spellName, 1, 1, 1)
+        GameTooltip:Show()
+    end
 end
 
 function PallyPower_PerformAuraCycleBackwards(name, skipempty)
