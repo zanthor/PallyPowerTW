@@ -1,5 +1,9 @@
 local initialized = false
 
+-- SuperWoW detection (v1.38)
+local PP_SuperWoW = SetAutoloot and true or false
+local PP_TrackedGUIDs = {}
+
 PALLYPOWER_GREATERBLESSINGDURATION = 30 * 60
 PALLYPOWER_NORMALBLESSINGDURATION = 10 * 60
 PALLYPOWER_SKIPBLESSINGDURATION = 30 -- When i implement blacklist for out of LoS -- Test 
@@ -2633,9 +2637,21 @@ function PallyPower_ScanRaid()
                         PP_ScanInfo[classID][petId]["name"] = pet_name
                         PP_ScanInfo[classID][petId]["visible"] = UnitIsVisible(petId)
 
+                        -- Enhanced: Try GUID-based scanning (v1.38)
+                        local scanTarget = petId
+                        if PP_SuperWoW then
+                            local exists, guid = UnitExists(petId)
+                            if exists and guid then
+                                if type(guid) == "string" and string.sub(guid, 1, 2) ~= "0x" then
+                                    guid = "0x" .. guid
+                                end
+                                scanTarget = guid
+                            end
+                        end
+
                         local j = 1
-                        while UnitBuff(petId, j, true) do
-                            local buffIcon, _ = UnitBuff(petId, j, true)
+                        while UnitBuff(scanTarget, j, true) do
+                            local buffIcon, _ = UnitBuff(scanTarget, j, true)
                             local txtID = PallyPower_GetBuffTextureID(buffIcon)
                             if txtID > 5 then
                                 txtID = txtID - 6
@@ -2654,9 +2670,21 @@ function PallyPower_ScanRaid()
             PP_ScanInfo[cid][unit]["name"] = name
             PP_ScanInfo[cid][unit]["visible"] = UnitIsVisible(unit)
 
+            -- Enhanced: Try GUID-based scanning for better reliability (v1.38)
+            local scanTarget = unit
+            if PP_SuperWoW then
+                local exists, guid = UnitExists(unit)
+                if exists and guid then
+                    if type(guid) == "string" and string.sub(guid, 1, 2) ~= "0x" then
+                        guid = "0x" .. guid
+                    end
+                    scanTarget = guid
+                end
+            end
+
             local j = 1
-            while UnitBuff(unit, j, true) do
-                local buffIcon, _ = UnitBuff(unit, j, true)
+            while UnitBuff(scanTarget, j, true) do
+                local buffIcon, _ = UnitBuff(scanTarget, j, true)
                 local txtID = PallyPower_GetBuffTextureID(buffIcon)
                 if txtID > 5 then
                     txtID = txtID - 6
@@ -3385,4 +3413,44 @@ function PallyPower_CastSeal()
             end
         end
     end
+end
+
+---------------------------------------------------
+-- GUID Tracking System (v1.38 - like Cursive)
+---------------------------------------------------
+if PP_SuperWoW then
+  local PP_GUIDTracker = CreateFrame("Frame")
+  PP_GUIDTracker:RegisterEvent("PLAYER_TARGET_CHANGED")
+  PP_GUIDTracker:RegisterEvent("UNIT_COMBAT")
+  PP_GUIDTracker:RegisterEvent("UNIT_MODEL_CHANGED")
+  
+  PP_GUIDTracker:SetScript("OnEvent", function()
+    if event == "PLAYER_TARGET_CHANGED" then
+      local exists, guid = UnitExists("target")
+      if exists and guid and not UnitIsDead("target") then
+        if type(guid) == "string" and string.sub(guid, 1, 2) ~= "0x" then
+          guid = "0x" .. guid
+        end
+        PP_TrackedGUIDs[guid] = GetTime()
+      end
+    elseif event == "UNIT_COMBAT" or event == "UNIT_MODEL_CHANGED" then
+      local guid = arg1
+      if guid then
+        if type(guid) == "string" and string.sub(guid, 1, 2) ~= "0x" then
+          guid = "0x" .. guid
+        end
+        if UnitExists(guid) and not UnitIsDead(guid) then
+          PP_TrackedGUIDs[guid] = GetTime()
+        end
+      end
+    end
+    
+    -- Cleanup old GUIDs (older than 30 seconds)
+    local now = GetTime()
+    for guid, timestamp in pairs(PP_TrackedGUIDs) do
+      if (now - timestamp) > 30 then
+        PP_TrackedGUIDs[guid] = nil
+      end
+    end
+  end)
 end
