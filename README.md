@@ -1,4 +1,4 @@
-# PallyPowerTW for Turtle WOW
+# PallyPowerTW for Turtle WOW w/Nampower & UnitXP SP3
 
 ## Please note!
 ## 1) Use your Left mouse button to do a Greater Blessing!
