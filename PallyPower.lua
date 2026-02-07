@@ -4,6 +4,9 @@ local initialized = false
 local PP_SuperWoW = SetAutoloot and true or false
 local PP_TrackedGUIDs = {}
 
+-- Nampower API detection - will be set during initialization
+local PP_NampowerAPI = false
+
 PALLYPOWER_GREATERBLESSINGDURATION = 30 * 60
 PALLYPOWER_NORMALBLESSINGDURATION = 10 * 60
 PALLYPOWER_SKIPBLESSINGDURATION = 30 -- When i implement blacklist for out of LoS -- Test 
@@ -33,6 +36,10 @@ BuffIcon = {}
 AuraIcons = {}
 SealIcons = {}
 BuffIconSmall = {}
+
+-- Aura and Seal spell names for Nampower matching
+AuraNames = {}
+SealNames = {}
 
 PallyPower_LayOnHandsIcon = "Interface\\Icons\\Spell_Holy_LayOnHands"
 PallyPower_DivineItervention = "Interface\\Icons\\Spell_Nature_TimeStop"
@@ -211,17 +218,123 @@ function PallyPower_ShowMemoryUsage()
     return mem
 end
 
-function PallyPower_CheckTargetLoS(target)
-    if PP_PerUser.useunitxp_sp3 == false then return true end -- If we are not using UnitXP.dll, we assume we are in LoS
+function PallyPower_CheckTargetLoS(target, maxRange)
+    if not PP_PerUser or PP_PerUser.useunitxp_sp3 == false then return true end -- If we are not using UnitXP.dll, we assume we are in LoS
     if not target then target = "target" end
-    if (PP_UnitXPDllLoaded) then
-        return UnitXP("inSight","player",target)
+    if not maxRange then maxRange = 40 end -- Default blessing range is 40 yards
+    
+    local function debugLog(msg)
+        if OGAALogger and OGAALogger.AddMessage and type(OGAALogger.AddMessage) == "function" then
+            OGAALogger.AddMessage("PallyPower_LOS", msg)
+        end
+    end
+    
+    debugLog("CheckTargetLoS called for: " .. tostring(target) .. ", maxRange=" .. tostring(maxRange))
+    debugLog("  PP_UnitXPDllLoaded: " .. tostring(PP_UnitXPDllLoaded))
+    debugLog("  PP_PerUser.useunitxp_sp3: " .. tostring(PP_PerUser.useunitxp_sp3))
+    
+    if PP_UnitXPDllLoaded then
+        -- Check connection and visibility first (like Puppeteer)
+        if not UnitIsConnected(target) then
+            debugLog("  Result: FALSE - UnitIsConnected returned false")
+            return false
+        end
+        
+        if not UnitIsVisible(target) then
+            debugLog("  Result: FALSE - UnitIsVisible returned false")
+            return false
+        end
+        
+        -- Check line of sight
+        local inSight = UnitXP("inSight","player",target)
+        debugLog("  UnitXP('inSight'): " .. tostring(inSight))
+        if not inSight then
+            debugLog("  Result: FALSE - not in sight")
+            return false
+        end
+        
+        -- Check range
+        local distance = UnitXP("distanceBetween","player",target)
+        debugLog("  UnitXP('distanceBetween'): " .. tostring(distance))
+        if distance and distance > maxRange then
+            debugLog("  Result: FALSE - distance " .. distance .. " > " .. maxRange)
+            return false
+        end
+        
+        debugLog("  Result: TRUE - all checks passed")
+        return true
     else
+        debugLog("  Result: TRUE - PP_UnitXPDllLoaded is false, assuming in LOS")
         return true -- If UnitXP.dll is not loaded, we assume we are in LoS
     end
 end
 
+-- Helper function to get distance to a unit (returns nil if UnitXP not available or unit invalid)
+function PallyPower_GetUnitDistance(unit)
+    local function debugLog(msg)
+        if OGAALogger and OGAALogger.AddMessage and type(OGAALogger.AddMessage) == "function" then
+            OGAALogger.AddMessage("PallyPower_Dist", msg)
+        end
+    end
+    
+    debugLog("GetUnitDistance called for: " .. tostring(unit))
+    
+    if not PP_PerUser or not PP_UnitXPDllLoaded or PP_PerUser.useunitxp_sp3 == false then
+        debugLog("  Result: nil - UnitXP not available or not enabled")
+        return nil
+    end
+    
+    if not unit or not UnitExists(unit) then
+        debugLog("  Result: nil - unit doesn't exist")
+        return nil
+    end
+    
+    if not UnitIsConnected(unit) or not UnitIsVisible(unit) then
+        debugLog("  Result: 9999 - unit not connected or not visible")
+        return 9999
+    end
+    
+    local distance = UnitXP("distanceBetween","player",unit)
+    debugLog("  UnitXP('distanceBetween'): " .. tostring(distance))
+    local result = math.max(distance or 9999, 0)
+    debugLog("  Result: " .. tostring(result))
+    return result
+end
+
+-- Sort units by distance (closest first), prioritizing those in range and LOS
+function PallyPower_SortUnitsByProximity(unitsTable, maxRange)
+    if not unitsTable then return {} end
+    if not maxRange then maxRange = 40 end
+    
+    -- Convert the units table to an array with distance info
+    local unitsArray = {}
+    for unit, stats in pairs(unitsTable) do
+        local distance = PallyPower_GetUnitDistance(unit)
+        local inLOS = PallyPower_CheckTargetLoS(unit, maxRange)
+        
+        table.insert(unitsArray, {
+            unit = unit,
+            stats = stats,
+            distance = distance or 9999, -- Units with unknown distance go to the end
+            inLOS = inLOS
+        })
+    end
+    
+    -- Sort by: LOS first, then by distance
+    table.sort(unitsArray, function(a, b)
+        if a.inLOS ~= b.inLOS then
+            return a.inLOS -- In LOS units come first
+        end
+        return a.distance < b.distance -- Then sort by distance
+    end)
+    
+    return unitsArray
+end
+
 function PallyPower_InitConfig()
+    -- Detect Nampower API
+    PP_NampowerAPI = GetUnitField ~= nil
+    
     if PP_PerUser.scalemain == nil then PP_PerUser.scalemain = 1 end
     if PP_PerUser.scalebar == nil then PP_PerUser.scalebar = 1 end
     if PP_PerUser.scanfreq == nil then PP_PerUser.scanfreq = 10 end
@@ -241,10 +354,18 @@ function PallyPower_InitConfig()
     if PP_PerUser.useunitxp_sp3 == nil then PP_PerUser.useunitxp_sp3 = false end
     if PP_PerUser.usehdicons == nil then PP_PerUser.usehdicons = false end
     if PP_PerUser.transparency == nil then PP_PerUser.transparency = 0.5 end
-    if (pcall(UnitXP, "nop", "nop") == true) then
-       PP_UnitXPDllLoaded = true;
+    
+    -- UnitXP SP3 detection (using Puppeteer's safer method)
+    if UnitXP and pcall(UnitXP, "inSight", "player", "player") then
+       PP_UnitXPDllLoaded = true
+       -- Auto-enable UnitXP SP3 if it was previously nil (first time detection)
+       if PP_PerUser.useunitxp_sp3 == false and GetCVar("PP_AutoEnabledUnitXP") ~= "1" then
+           PP_PerUser.useunitxp_sp3 = true
+           SetCVar("PP_AutoEnabledUnitXP", "1")
+           DEFAULT_CHAT_FRAME:AddMessage("[PallyPower] UnitXP SP3 detected and auto-enabled for range/LOS checking")
+       end
     else
-        PP_UnitXPDllLoaded = false;
+        PP_UnitXPDllLoaded = false
         UseUnitXPSP3OptionChk:SetChecked(false)
         PP_PerUser.useunitxp_sp3 = false
         UseUnitXPSP3OptionChk:Disable()
@@ -322,6 +443,34 @@ function PallyPower_OnUpdate(tdiff)
     end
 end
 
+-- Helper function: Check if spell ID matches expected buff by comparing against known blessing/buff names
+-- This is used with Nampower to match spell IDs from auras to the buffs we're checking for
+function PallyPower_GetBlessingNameFromTexture(texturePath)
+    if not texturePath then return nil end
+    
+    -- Wisdom blessings
+    if string.find(texturePath, "SealOfWisdom") or string.find(texturePath, "BlessingofWisdom") then
+        return {"Blessing of Wisdom", "Greater Blessing of Wisdom"}
+    -- Kings/Might
+    elseif string.find(texturePath, "FistOfJustice") or string.find(texturePath, "BlessingofKings") or string.find(texturePath, "GreaterBlessingofKings") then
+        return {"Blessing of Kings", "Greater Blessing of Kings", "Blessing of Might", "Greater Blessing of Might"}
+    -- Salvation
+    elseif string.find(texturePath, "SealOfSalvation") or string.find(texturePath, "BlessingofSalvation") then
+        return {"Blessing of Salvation", "Greater Blessing of Salvation"}
+    -- Light
+    elseif string.find(texturePath, "PrayerOfHealing") or string.find(texturePath, "BlessingofLight") then
+        return {"Blessing of Light", "Greater Blessing of Light"}
+    -- Sanctuary
+    elseif string.find(texturePath, "MageArmor") or string.find(texturePath, "BlessingofSanctuary") then
+        return {"Blessing of Sanctuary", "Greater Blessing of Sanctuary"}
+    -- Protection (Lightning Shield icon)
+    elseif string.find(texturePath, "LightningShield") then
+        return {"Blessing of Protection"}
+    end
+    
+    return nil
+end
+
 function PallyPower_AdjustIcons()
     local icons_prefix
     if PP_PerUser.usehdicons == true then
@@ -337,6 +486,15 @@ function PallyPower_AdjustIcons()
     AuraIcons[4] = "Interface\\"..icons_prefix.."Icons\\Spell_Frost_WizardMark"
     AuraIcons[5] = "Interface\\"..icons_prefix.."Icons\\Spell_Fire_SealOfFire"
     AuraIcons[6] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_MindVision"
+    
+    -- Aura spell names for Nampower matching
+    AuraNames[0] = "Devotion Aura"
+    AuraNames[1] = "Retribution Aura"
+    AuraNames[2] = "Concentration Aura"
+    AuraNames[3] = "Shadow Resistance Aura"
+    AuraNames[4] = "Frost Resistance Aura"
+    AuraNames[5] = "Fire Resistance Aura"
+    AuraNames[6] = "Sanctity Aura"
 
     SealIcons[0] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_RighteousnessAura"
     SealIcons[1] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_HolySmite"
@@ -344,6 +502,14 @@ function PallyPower_AdjustIcons()
     SealIcons[3] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_SealOfWrath"
     SealIcons[4] = "Interface\\"..icons_prefix.."Icons\\Ability_Warrior_InnerRage"
     SealIcons[5] = "Interface\\"..icons_prefix.."Icons\\Ability_ThunderBolt"
+    
+    -- Seal spell names for Nampower matching
+    SealNames[0] = "Seal of Righteousness"
+    SealNames[1] = "Seal of Light"
+    SealNames[2] = "Seal of Wisdom"
+    SealNames[3] = "Seal of Justice"
+    SealNames[4] = "Seal of the Crusader"
+    SealNames[5] = "Seal of Command"
 
     if (PP_PerUser.regularblessings == true) then
         RegularBlessings = true
@@ -351,14 +517,14 @@ function PallyPower_AdjustIcons()
         BlessingIcon[1] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_FistOfJustice"
         BlessingIcon[2] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_SealOfSalvation"
         BlessingIcon[3] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_PrayerOfHealing02"
-        BlessingIcon[4] = "Interface\\"..icons_prefix.."Icons\\Spell_Magic_MageArmor"
-        BlessingIcon[5] = "Interface\\"..icons_prefix.."Icons\\Spell_Nature_LightningShield"
+        BlessingIcon[4] = "Interface\\"..icons_prefix.."Icons\\Spell_Nature_LightningShield"
+        BlessingIcon[5] = "Interface\\"..icons_prefix.."Icons\\Spell_Magic_MageArmor"
         BuffIcon[0] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_SealOfWisdom"
         BuffIcon[1] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_FistOfJustice"
         BuffIcon[2] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_SealOfSalvation"
         BuffIcon[3] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_PrayerOfHealing02"
-        BuffIcon[4] = "Interface\\"..icons_prefix.."Icons\\Spell_Magic_MageArmor"
-        BuffIcon[5] = "Interface\\"..icons_prefix.."Icons\\Spell_Nature_LightningShield"
+        BuffIcon[4] = "Interface\\"..icons_prefix.."Icons\\Spell_Nature_LightningShield"
+        BuffIcon[5] = "Interface\\"..icons_prefix.."Icons\\Spell_Magic_MageArmor"
         BuffIcon[9] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_SealOfFury"
     else
         RegularBlessings = false
@@ -379,8 +545,8 @@ function PallyPower_AdjustIcons()
         BuffIconSmall[1] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_FistOfJustice"
         BuffIconSmall[2] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_SealOfSalvation"
         BuffIconSmall[3] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_PrayerOfHealing02"
-        BuffIconSmall[4] = "Interface\\"..icons_prefix.."Icons\\Spell_Magic_MageArmor"
-        BuffIconSmall[5] = "Interface\\"..icons_prefix.."Icons\\Spell_Nature_LightningShield"
+        BuffIconSmall[4] = "Interface\\"..icons_prefix.."Icons\\Spell_Nature_LightningShield"
+        BuffIconSmall[5] = "Interface\\"..icons_prefix.."Icons\\Spell_Magic_MageArmor"
     end
 
     PallyPower_ClassTexture[0] = "Interface\\"..icons_prefix.."Icons\\Warrior"
@@ -479,6 +645,26 @@ end
 
 function PallyPower_CheckRigteousFurry()
     local buff = "Spell_Holy_SealOfFury"
+    
+    -- Use Nampower API if available for better performance
+    if PP_NampowerAPI then
+        local auras = GetUnitField("player", "aura")
+        if auras then
+            for i = 1, table.getn(auras) do
+                local spellId = auras[i]
+                if spellId and spellId > 0 then
+                    -- Get spell name and check if it's Righteous Fury
+                    local spellName = GetSpellRecField(spellId, "name")
+                    if spellName and spellName == "Righteous Fury" then
+                        return true
+                    end
+                end
+            end
+        end
+        return false
+    end
+    
+    -- Fallback to original method
     local counter = 0
     while GetPlayerBuff(counter) >= 0 do
         local index, untilCancelled = GetPlayerBuff(counter)
@@ -497,6 +683,29 @@ end
 
 function PallyPower_CancelSalvationBuff()
     local buff = {"Spell_Holy_SealOfSalvation", "Spell_Holy_GreaterBlessingofSalvation"}
+    
+    -- Use Nampower API if available for better performance
+    if PP_NampowerAPI then
+        local auras = GetUnitField("player", "aura")
+        if auras then
+            for auraIdx = 1, table.getn(auras) do
+                local spellId = auras[auraIdx]
+                if spellId and spellId > 0 then
+                    local spellName = GetSpellRecField(spellId, "name")
+                    if spellName and (spellName == "Blessing of Salvation" or spellName == "Greater Blessing of Salvation") then
+                        -- Cancel using buff index (1-based for UnitBuff compatibility)
+                        CancelPlayerBuff(auraIdx - 1);
+                        UIErrorsFrame:Clear();
+                        UIErrorsFrame:AddMessage("Salvation Removed");
+                        return
+                    end
+                end
+            end
+        end
+        return nil
+    end
+    
+    -- Fallback to original method
     local counter = 0
     while GetPlayerBuff(counter) >= 0 do
         local index, untilCancelled = GetPlayerBuff(counter)
@@ -1130,26 +1339,65 @@ function PallyPower_UpdateUI()
         PallyPowerBuffBarRF:SetBackdropColor(0, 0, 0, PP_PerUser.transparency)
         local i
         local testUnitBuff
-        for i = 1,40 do 
-            testUnitBuff = UnitBuff("player",i) 
-            if (testUnitBuff and testUnitBuff == string.gsub(BuffIcon[9],icons_prefix,"")) then 
-                PallyPowerBuffBarRF:SetBackdropColor(0, 1, 0, PP_PerUser.transparency)
-                break
-            end 
+        
+        -- Use Nampower API if available for better performance
+        if PP_NampowerAPI then
+            local auras = GetUnitField("player", "aura")
+            if auras then
+                for i = 1, table.getn(auras) do
+                    local spellId = auras[i]
+                    if spellId and spellId > 0 then
+                        local spellName = GetSpellRecField(spellId, "name")
+                        if spellName and spellName == "Righteous Fury" then
+                            PallyPowerBuffBarRF:SetBackdropColor(0, 1, 0, PP_PerUser.transparency)
+                            break
+                        end
+                    end
+                end
+            end
+        else
+            -- Fallback to original method
+            for i = 1,40 do 
+                testUnitBuff = UnitBuff("player",i) 
+                if (testUnitBuff and testUnitBuff == string.gsub(BuffIcon[9],icons_prefix,"")) then 
+                    PallyPowerBuffBarRF:SetBackdropColor(0, 1, 0, PP_PerUser.transparency)
+                    break
+                end 
+            end
         end 
     
         PallyPowerBuffBarAura:SetBackdropColor(0, 0, 0, PP_PerUser.transparency)
         if PallyPower_AuraAssignments[namePlayer] then
             getglobal("PallyPowerBuffBarAuraBuffIcon"):SetTexture(AuraIcons[PallyPower_AuraAssignments[namePlayer]])
-            for i=1,40 do 
-                testUnitBuff = UnitBuff("player",i) 
-                if (testUnitBuff and PallyPower_AuraAssignments[namePlayer] ~= nil and 
-                    AuraIcons[PallyPower_AuraAssignments[namePlayer]] ~= nil and
-                    testUnitBuff == string.gsub(AuraIcons[PallyPower_AuraAssignments[namePlayer]],icons_prefix,"")) then 
-                    PallyPowerBuffBarAura:SetBackdropColor(0, 1, 0, PP_PerUser.transparency)
-                    break
-                end 
-            end 
+            
+            -- Use Nampower API if available for better performance
+            if PP_NampowerAPI then
+                local auras = GetUnitField("player", "aura")
+                if auras and AuraNames[PallyPower_AuraAssignments[namePlayer]] then
+                    local targetAuraName = AuraNames[PallyPower_AuraAssignments[namePlayer]]
+                    for i = 1, table.getn(auras) do
+                        local spellId = auras[i]
+                        if spellId and spellId > 0 then
+                            local spellName = GetSpellRecField(spellId, "name")
+                            if spellName and spellName == targetAuraName then
+                                PallyPowerBuffBarAura:SetBackdropColor(0, 1, 0, PP_PerUser.transparency)
+                                break
+                            end
+                        end
+                    end
+                end
+            else
+                -- Fallback to original method
+                for i=1,40 do 
+                    testUnitBuff = UnitBuff("player",i) 
+                    if (testUnitBuff and PallyPower_AuraAssignments[namePlayer] ~= nil and 
+                        AuraIcons[PallyPower_AuraAssignments[namePlayer]] ~= nil and
+                        testUnitBuff == string.gsub(AuraIcons[PallyPower_AuraAssignments[namePlayer]],icons_prefix,"")) then 
+                        PallyPowerBuffBarAura:SetBackdropColor(0, 1, 0, PP_PerUser.transparency)
+                        break
+                    end 
+                end
+            end
         else
             getglobal("PallyPowerBuffBarAuraBuffIcon"):SetTexture(nil)
         end
@@ -1157,15 +1405,35 @@ function PallyPower_UpdateUI()
         PallyPowerBuffBarSeal:SetBackdropColor(0, 0, 0, PP_PerUser.transparency)
         if PallyPower_SealAssignments[namePlayer] then
             getglobal("PallyPowerBuffBarSealBuffIcon"):SetTexture(SealIcons[PallyPower_SealAssignments[namePlayer]])
-            for i=1,40 do 
-                testUnitBuff = UnitBuff("player",i) 
-                if (testUnitBuff and PallyPower_SealAssignments[namePlayer] ~= nil and 
-                    SealIcons[PallyPower_SealAssignments[namePlayer]] ~= nil and
-                    testUnitBuff == string.gsub(SealIcons[PallyPower_SealAssignments[namePlayer]],icons_prefix,"")) then 
-                    PallyPowerBuffBarSeal:SetBackdropColor(0, 1, 0, PP_PerUser.transparency)
-                    break
-                end 
-            end 
+            
+            -- Use Nampower API if available for better performance
+            if PP_NampowerAPI then
+                local auras = GetUnitField("player", "aura")
+                if auras and SealNames[PallyPower_SealAssignments[namePlayer]] then
+                    local targetSealName = SealNames[PallyPower_SealAssignments[namePlayer]]
+                    for i = 1, table.getn(auras) do
+                        local spellId = auras[i]
+                        if spellId and spellId > 0 then
+                            local spellName = GetSpellRecField(spellId, "name")
+                            if spellName and spellName == targetSealName then
+                                PallyPowerBuffBarSeal:SetBackdropColor(0, 1, 0, PP_PerUser.transparency)
+                                break
+                            end
+                        end
+                    end
+                end
+            else
+                -- Fallback to original method
+                for i=1,40 do 
+                    testUnitBuff = UnitBuff("player",i) 
+                    if (testUnitBuff and PallyPower_SealAssignments[namePlayer] ~= nil and 
+                        SealIcons[PallyPower_SealAssignments[namePlayer]] ~= nil and
+                        testUnitBuff == string.gsub(SealIcons[PallyPower_SealAssignments[namePlayer]],icons_prefix,"")) then 
+                        PallyPowerBuffBarSeal:SetBackdropColor(0, 1, 0, PP_PerUser.transparency)
+                        break
+                    end 
+                end
+            end
         else
             getglobal("PallyPowerBuffBarSealBuffIcon"):SetTexture(nil)
         end
@@ -2566,6 +2834,61 @@ function PallyPower_PaladinLeftGroup()
     end
 end
 
+-- Helper function for Nampower: Convert spell name to buff ID
+function PallyPower_GetBuffIDFromSpellName(spellName)
+    if not spellName then return -2 end
+    
+    -- Use pattern matching to handle ranks (e.g., "Blessing of Wisdom (Rank 3)")
+    -- Wisdom
+    if string.find(spellName, "Greater Blessing of Wisdom") then
+        return 0
+    elseif string.find(spellName, "Blessing of Wisdom") then
+        return 0
+    -- Kings
+    elseif string.find(spellName, "Greater Blessing of Kings") then
+        return 1
+    elseif string.find(spellName, "Blessing of Kings") then
+        return 1
+    -- Salvation
+    elseif string.find(spellName, "Greater Blessing of Salvation") then
+        return 2
+    elseif string.find(spellName, "Blessing of Salvation") then
+        return 2
+    -- Light
+    elseif string.find(spellName, "Greater Blessing of Light") then
+        return 3
+    elseif string.find(spellName, "Blessing of Light") then
+        return 3
+    -- Might / Sanctuary (index depends on whether using regular or greater blessings)
+    elseif string.find(spellName, "Greater Blessing of Might") then
+        -- When using Greater Blessings, Might is at index 4
+        -- When using Regular Blessings, Might shares index 1 with Kings
+        if not RegularBlessings then
+            return 4
+        else
+            return 1
+        end
+    elseif string.find(spellName, "Blessing of Might") then
+        if not RegularBlessings then
+            return 4
+        else
+            return 1
+        end
+    -- Sanctuary - check Greater first!
+    elseif string.find(spellName, "Greater Blessing of Sanctuary") then
+        -- Greater Blessing of Sanctuary is at index 5
+        return 5
+    elseif string.find(spellName, "Blessing of Sanctuary") then
+        -- Regular Blessing of Sanctuary is always at index 4
+        return 4
+    -- Protection
+    elseif string.find(spellName, "Blessing of Protection") then
+        return 5
+    end
+    
+    return -2
+end
+
 function PallyPower_ScanRaid()
     if not PP_IsPally then
         return
@@ -2612,15 +2935,36 @@ function PallyPower_ScanRaid()
                         PP_ScanInfo[classID][petId]["name"] = pet_name
                         PP_ScanInfo[classID][petId]["visible"] = UnitIsVisible(petId)
 
-                        local j = 1
-                        while UnitBuff(petId, j, true) do
-                            local buffIcon, _ = UnitBuff(petId, j, true)
-                            local txtID = PallyPower_GetBuffTextureID(buffIcon)
-                            if txtID > 5 then
-                                txtID = txtID - 6
+                        -- Use Nampower API if available for better performance
+                        if PP_NampowerAPI then
+                            local auras = GetUnitField(petId, "aura")
+                            if auras then
+                                for i = 1, table.getn(auras) do
+                                    local spellId = auras[i]
+                                    if spellId and spellId > 0 then
+                                        local spellName = GetSpellRecField(spellId, "name")
+                                        if spellName then
+                                            local txtID = PallyPower_GetBuffIDFromSpellName(spellName)
+                                            if txtID > 5 then
+                                                txtID = txtID - 6
+                                            end
+                                            PP_ScanInfo[classID][petId][txtID] = true
+                                        end
+                                    end
+                                end
                             end
-                            PP_ScanInfo[classID][petId][txtID] = true
-                            j = j + 1
+                        else
+                            -- Fallback to original method
+                            local j = 1
+                            while UnitBuff(petId, j, true) do
+                                local buffIcon, _ = UnitBuff(petId, j, true)
+                                local txtID = PallyPower_GetBuffTextureID(buffIcon)
+                                if txtID > 5 then
+                                    txtID = txtID - 6
+                                end
+                                PP_ScanInfo[classID][petId][txtID] = true
+                                j = j + 1
+                            end
                         end
                     end
                 else
@@ -2649,15 +2993,36 @@ function PallyPower_ScanRaid()
                             end
                         end
 
-                        local j = 1
-                        while UnitBuff(scanTarget, j, true) do
-                            local buffIcon, _ = UnitBuff(scanTarget, j, true)
-                            local txtID = PallyPower_GetBuffTextureID(buffIcon)
-                            if txtID > 5 then
-                                txtID = txtID - 6
+                        -- Use Nampower API if available for better performance
+                        if PP_NampowerAPI then
+                            local auras = GetUnitField(scanTarget, "aura")
+                            if auras then
+                                for i = 1, table.getn(auras) do
+                                    local spellId = auras[i]
+                                    if spellId and spellId > 0 then
+                                        local spellName = GetSpellRecField(spellId, "name")
+                                        if spellName then
+                                            local txtID = PallyPower_GetBuffIDFromSpellName(spellName)
+                                            if txtID > 5 then
+                                                txtID = txtID - 6
+                                            end
+                                            PP_ScanInfo[classID][petId][txtID] = true
+                                        end
+                                    end
+                                end
                             end
-                            PP_ScanInfo[classID][petId][txtID] = true
-                            j = j + 1
+                        else
+                            -- Fallback to original method
+                            local j = 1
+                            while UnitBuff(scanTarget, j, true) do
+                                local buffIcon, _ = UnitBuff(scanTarget, j, true)
+                                local txtID = PallyPower_GetBuffTextureID(buffIcon)
+                                if txtID > 5 then
+                                    txtID = txtID - 6
+                                end
+                                PP_ScanInfo[classID][petId][txtID] = true
+                                j = j + 1
+                            end
                         end
                     end
                 end
@@ -2682,15 +3047,36 @@ function PallyPower_ScanRaid()
                 end
             end
 
-            local j = 1
-            while UnitBuff(scanTarget, j, true) do
-                local buffIcon, _ = UnitBuff(scanTarget, j, true)
-                local txtID = PallyPower_GetBuffTextureID(buffIcon)
-                if txtID > 5 then
-                    txtID = txtID - 6
+            -- Use Nampower API if available for better performance
+            if PP_NampowerAPI then
+                local auras = GetUnitField(scanTarget, "aura")
+                if auras then
+                    for i = 1, table.getn(auras) do
+                        local spellId = auras[i]
+                        if spellId and spellId > 0 then
+                            local spellName = GetSpellRecField(spellId, "name")
+                            if spellName then
+                                local txtID = PallyPower_GetBuffIDFromSpellName(spellName)
+                                if txtID > 5 then
+                                    txtID = txtID - 6
+                                end
+                                PP_ScanInfo[cid][unit][txtID] = true
+                            end
+                        end
+                    end
                 end
-                PP_ScanInfo[cid][unit][txtID] = true
-                j = j + 1
+            else
+                -- Fallback to original method
+                local j = 1
+                while UnitBuff(scanTarget, j, true) do
+                    local buffIcon, _ = UnitBuff(scanTarget, j, true)
+                    local txtID = PallyPower_GetBuffTextureID(buffIcon)
+                    if txtID > 5 then
+                        txtID = txtID - 6
+                    end
+                    PP_ScanInfo[cid][unit][txtID] = true
+                    j = j + 1
+                end
             end
         end
         tremove(PP_Scanners, 1)
@@ -2824,7 +3210,26 @@ function PallyPowerBuffButton_OnClick(btn, mousebtn)
         end
     end
     local LastRecentCast = RecentCast
-    for unit, stats in CurrentBuffs[btn.classID] do
+    
+    -- Track failure reasons for better error messages
+    local failureReasons = {}
+    
+    -- Sort units by proximity if UnitXP is available, otherwise use original iteration
+    local sortedUnits
+    if PP_PerUser and PP_UnitXPDllLoaded and PP_PerUser.useunitxp_sp3 then
+        sortedUnits = PallyPower_SortUnitsByProximity(CurrentBuffs[btn.classID], 40)
+    else
+        -- Fallback: convert to simple array for consistent iteration
+        sortedUnits = {}
+        for unit, stats in pairs(CurrentBuffs[btn.classID]) do
+            table.insert(sortedUnits, {unit = unit, stats = stats})
+        end
+    end
+    
+    for _, unitData in ipairs(sortedUnits) do
+        local unit = unitData.unit
+        local stats = unitData.stats
+        
         castspelloverride = -1
         if RecentCast ~= LastRecentCast then
             RecentCast = LastRecentCast
@@ -2857,11 +3262,54 @@ function PallyPowerBuffButton_OnClick(btn, mousebtn)
                 end
             end
 
-            if
-                SpellCanTargetUnit(unit) and (not UnitIsDeadOrGhost(unit)) and PallyPower_CheckTargetLoS(unit) and
-                    not (RecentCast and string.find(table.concat(LastCastOn[btn.classID], " "), unit)) and
-                    (not PallyPower_CastingSalvationOnTank(unit, castspellid, castspelloverride))
-            then
+            -- Debug cast checks
+            local canTarget = SpellCanTargetUnit(unit)
+            local notDead = not UnitIsDeadOrGhost(unit)
+            local hasLoS = PallyPower_CheckTargetLoS(unit)
+            local lastCastString = LastCastOn[btn.classID] and table.concat(LastCastOn[btn.classID], " ") or ""
+            local foundInRecent = lastCastString ~= "" and string.find(lastCastString, unit) ~= nil
+            local notRecent = not (RecentCast and foundInRecent)
+            local notSalvOnTank = not PallyPower_CastingSalvationOnTank(unit, castspellid, castspelloverride)
+            
+            -- Track failure reason
+            local failureReason = nil
+            if not canTarget then
+                failureReason = "can't target"
+            elseif not notDead then
+                failureReason = "dead/ghost"
+            elseif not hasLoS then
+                failureReason = "out of range/LOS"
+            elseif not notRecent then
+                failureReason = "recast_blocked"
+            elseif not notSalvOnTank then
+                failureReason = "salvation on tank"
+            end
+            
+            if failureReason then
+                if not failureReasons[failureReason] then
+                    failureReasons[failureReason] = {}
+                end
+                table.insert(failureReasons[failureReason], UnitName(unit) or unit)
+            end
+            
+            if OGAALogger and OGAALogger.AddMessage then
+                OGAALogger.AddMessage("PallyPower_Cast", "=== Cast Check for " .. unit .. " ===")
+                OGAALogger.AddMessage("PallyPower_Cast", "  SpellCanTargetUnit: " .. tostring(canTarget))
+                OGAALogger.AddMessage("PallyPower_Cast", "  Not Dead/Ghost: " .. tostring(notDead))
+                OGAALogger.AddMessage("PallyPower_Cast", "  Has LOS: " .. tostring(hasLoS))
+                OGAALogger.AddMessage("PallyPower_Cast", "  RecentCast flag: " .. tostring(RecentCast))
+                OGAALogger.AddMessage("PallyPower_Cast", "  LastCastOn[" .. btn.classID .. "]: " .. lastCastString)
+                OGAALogger.AddMessage("PallyPower_Cast", "  Found in recent: " .. tostring(foundInRecent))
+                OGAALogger.AddMessage("PallyPower_Cast", "  Not Recent Cast: " .. tostring(notRecent))
+                OGAALogger.AddMessage("PallyPower_Cast", "  Not Salv on Tank: " .. tostring(notSalvOnTank))
+                local allPass = canTarget and notDead and hasLoS and notRecent and notSalvOnTank
+                OGAALogger.AddMessage("PallyPower_Cast", "  ALL CHECKS PASS: " .. tostring(allPass))
+                if failureReason then
+                    OGAALogger.AddMessage("PallyPower_Cast", "  FAIL REASON: " .. failureReason)
+                end
+            end
+            
+            if canTarget and notDead and hasLoS and notRecent and notSalvOnTank then
                 PP_Debug("Trying to cast on " .. unit)
                 local blessing = GetNormalBlessings(UnitName("player"),btn.classID, stats.name)
                 if blessing ~= -1 and mousebtn == "RightButton" then
@@ -2949,10 +3397,29 @@ function PallyPowerBuffButton_OnClick(btn, mousebtn)
     end
     SpellStopTargeting()
     TargetLastTarget()
-    PallyPower_ShowFeedback(
-        format(PallyPower_CouldntFind, PallyPower_BlessingID[btn.buffID], PallyPower_ClassID[btn.classID]),
-        1, 1, 0 -- Yellow color for feedback
-    )
+    
+    -- Build helpful error message based on failure reasons
+    local errorMsg = ""
+    if failureReasons["recast_blocked"] and table.getn(failureReasons["recast_blocked"]) > 0 then
+        local names = table.concat(failureReasons["recast_blocked"], ", ")
+        errorMsg = "Recast blocked on " .. names .. " (hold Shift to bypass)"
+    elseif failureReasons["out of range/LOS"] and table.getn(failureReasons["out of range/LOS"]) > 0 then
+        local names = table.concat(failureReasons["out of range/LOS"], ", ")
+        errorMsg = names .. " out of range or line of sight"
+    elseif failureReasons["dead/ghost"] and table.getn(failureReasons["dead/ghost"]) > 0 then
+        local names = table.concat(failureReasons["dead/ghost"], ", ")
+        errorMsg = names .. " is dead or ghost"
+    elseif failureReasons["salvation on tank"] and table.getn(failureReasons["salvation on tank"]) > 0 then
+        local names = table.concat(failureReasons["salvation on tank"], ", ")
+        errorMsg = "Won't cast Salvation on tank: " .. names
+    elseif failureReasons["can't target"] and table.getn(failureReasons["can't target"]) > 0 then
+        local names = table.concat(failureReasons["can't target"], ", ")
+        errorMsg = "Can't target: " .. names
+    else
+        errorMsg = format(PallyPower_CouldntFind, PallyPower_BlessingID[btn.buffID], PallyPower_ClassID[btn.classID])
+    end
+    
+    PallyPower_ShowFeedback(errorMsg, 1, 1, 0)
 end
 
 function PallyPower_CastingSalvationOnTank(punit, castspell, overridespell)
@@ -3035,7 +3502,22 @@ function PallyPower_AutoBless(mousebutton)
         local LastRecentCast = RecentCast
         if (btn.classID ~= nil and CurrentBuffs[btn.classID]) then
             
-            for unit, stats in CurrentBuffs[btn.classID] do
+            -- Sort units by proximity if UnitXP is available, otherwise use original iteration
+            local sortedUnits
+            if PP_PerUser and PP_UnitXPDllLoaded and PP_PerUser.useunitxp_sp3 then
+                sortedUnits = PallyPower_SortUnitsByProximity(CurrentBuffs[btn.classID], 40)
+            else
+                -- Fallback: convert to simple array for consistent iteration
+                sortedUnits = {}
+                for unit, stats in pairs(CurrentBuffs[btn.classID]) do
+                    table.insert(sortedUnits, {unit = unit, stats = stats})
+                end
+            end
+            
+            for _, unitData in ipairs(sortedUnits) do
+                local unit = unitData.unit
+                local stats = unitData.stats
+                
                 castspelloverride = -1
                 if RecentCast ~= LastRecentCast then
                     RecentCast = LastRecentCast
@@ -3392,12 +3874,31 @@ function PallyPower_CastSeal()
         -- If the player already has the seal buff active, don't re-cast
         local alreadyActive = false
         if SealIcons[sealId] then
-            for i = 1, 40 do
-                local testUnitBuff = UnitBuff("player", i)
-                if (testUnitBuff and SealIcons[sealId] ~= nil and
-                    testUnitBuff == string.gsub(SealIcons[sealId], icons_prefix, "")) then
-                    alreadyActive = true
-                    break
+            -- Use Nampower API if available for better performance
+            if PP_NampowerAPI then
+                local auras = GetUnitField("player", "aura")
+                if auras and SealNames[sealId] then
+                    local targetSealName = SealNames[sealId]
+                    for i = 1, table.getn(auras) do
+                        local spellId = auras[i]
+                        if spellId and spellId > 0 then
+                            local spellName = GetSpellRecField(spellId, "name")
+                            if spellName and spellName == targetSealName then
+                                alreadyActive = true
+                                break
+                            end
+                        end
+                    end
+                end
+            else
+                -- Fallback to original method
+                for i = 1, 40 do
+                    local testUnitBuff = UnitBuff("player", i)
+                    if (testUnitBuff and SealIcons[sealId] ~= nil and
+                        testUnitBuff == string.gsub(SealIcons[sealId], icons_prefix, "")) then
+                        alreadyActive = true
+                        break
+                    end
                 end
             end
         end
@@ -3453,4 +3954,263 @@ if PP_SuperWoW then
       end
     end
   end)
+end
+
+-- UnitXP Toggle Command
+SLASH_PPUNITXP1 = "/ppunitxp"
+SlashCmdList["PPUNITXP"] = function(msg)
+  msg = string.lower(msg or "")
+  
+  if not PP_UnitXPDllLoaded then
+    DEFAULT_CHAT_FRAME:AddMessage("|cffff0000[PallyPower] UnitXP SP3 is not detected/loaded|r")
+    return
+  end
+  
+  if msg == "on" or msg == "enable" or msg == "1" or msg == "true" then
+    PP_PerUser.useunitxp_sp3 = true
+    UseUnitXPSP3OptionChk:SetChecked(true)
+    DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00[PallyPower] UnitXP SP3 range/LOS checking ENABLED|r")
+  elseif msg == "off" or msg == "disable" or msg == "0" or msg == "false" then
+    PP_PerUser.useunitxp_sp3 = false
+    UseUnitXPSP3OptionChk:SetChecked(false)
+    DEFAULT_CHAT_FRAME:AddMessage("|cffff9900[PallyPower] UnitXP SP3 range/LOS checking DISABLED|r")
+  else
+    -- Toggle
+    PP_PerUser.useunitxp_sp3 = not PP_PerUser.useunitxp_sp3
+    UseUnitXPSP3OptionChk:SetChecked(PP_PerUser.useunitxp_sp3)
+    if PP_PerUser.useunitxp_sp3 then
+      DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00[PallyPower] UnitXP SP3 range/LOS checking ENABLED|r")
+    else
+      DEFAULT_CHAT_FRAME:AddMessage("|cffff9900[PallyPower] UnitXP SP3 range/LOS checking DISABLED|r")
+    end
+  end
+end
+
+-- Debug Command
+SLASH_PPDBG1 = "/ppdbg"
+SlashCmdList["PPDBG"] = function()
+  local function log(msg)
+    if OGAALogger and OGAALogger.AddMessage and type(OGAALogger.AddMessage) == "function" then
+      OGAALogger.AddMessage("PallyPower", msg)
+    else
+      DEFAULT_CHAT_FRAME:AddMessage("[PallyPower] " .. msg)
+    end
+  end
+  
+  log("=== PALLYPOWER DEBUG ===")
+  log("Time: " .. date("%H:%M:%S"))
+  
+  -- Core Status
+  log("")
+  log("--- Core Status ---")
+  log("PP_IsPally: " .. tostring(PP_IsPally))
+  log("PP_NampowerAPI: " .. tostring(PP_NampowerAPI))
+  log("RegularBlessings: " .. tostring(RegularBlessings))
+  if PP_PerUser then
+    log("PP_PerUser.regularblessings: " .. tostring(PP_PerUser.regularblessings))
+    log("PP_PerUser.useunitxp_sp3: " .. tostring(PP_PerUser.useunitxp_sp3))
+  else
+    log("PP_PerUser: nil")
+  end
+  log("PP_UnitXPDllLoaded: " .. tostring(PP_UnitXPDllLoaded))
+  
+  -- UnitXP SP3 Status
+  log("")
+  log("--- UnitXP SP3 Status ---")
+  if UnitXP then
+    log("UnitXP function exists: true")
+    
+    -- Test basic functions
+    local success, result = pcall(UnitXP, "inSight", "player", "player")
+    log("UnitXP('inSight','player','player'): success=" .. tostring(success) .. ", result=" .. tostring(result))
+    
+    if success then
+      -- Test distance
+      local distSuccess, dist = pcall(UnitXP, "distanceBetween", "player", "player")
+      log("UnitXP('distanceBetween','player','player'): success=" .. tostring(distSuccess) .. ", result=" .. tostring(dist))
+      
+      -- Test with target if exists
+      if UnitExists("target") then
+        local losSuccess, los = pcall(UnitXP, "inSight", "player", "target")
+        log("UnitXP('inSight','player','target'): success=" .. tostring(losSuccess) .. ", result=" .. tostring(los))
+        
+        local tdSuccess, tdist = pcall(UnitXP, "distanceBetween", "player", "target")
+        log("UnitXP('distanceBetween','player','target'): success=" .. tostring(tdSuccess) .. ", result=" .. tostring(tdist))
+        
+        log("UnitIsConnected('target'): " .. tostring(UnitIsConnected("target")))
+        log("UnitIsVisible('target'): " .. tostring(UnitIsVisible("target")))
+      else
+        log("No target selected for UnitXP target tests")
+      end
+    end
+  else
+    log("UnitXP function exists: false")
+  end
+  
+  -- BuffIcon Array
+  log("")
+  log("--- BuffIcon Array ---")
+  if BuffIcon then
+    for i = 0, 9 do
+      if BuffIcon[i] then
+        local short = string.gsub(BuffIcon[i], "Interface\\AddOns\\PallyPowerTW\\", "")
+        short = string.gsub(short, "Interface\\AddOns\\PallyPowerTW\\HD", "HD")
+        log("BuffIcon[" .. i .. "]: " .. short)
+      end
+    end
+  else
+    log("BuffIcon: nil")
+  end
+  
+  -- BlessingIcon Array
+  log("")
+  log("--- BlessingIcon Array ---")
+  if BlessingIcon then
+    for i = 0, 9 do
+      if BlessingIcon[i] then
+        local short = string.gsub(BlessingIcon[i], "Interface\\AddOns\\PallyPowerTW\\", "")
+        short = string.gsub(short, "Interface\\AddOns\\PallyPowerTW\\HD", "HD")
+        log("BlessingIcon[" .. i .. "]: " .. short)
+      end
+    end
+  else
+    log("BlessingIcon: nil")
+  end
+  
+  -- BuffIconSmall Array
+  log("")
+  log("--- BuffIconSmall Array ---")
+  if BuffIconSmall then
+    for i = 0, 9 do
+      if BuffIconSmall[i] then
+        local short = string.gsub(BuffIconSmall[i], "Interface\\AddOns\\PallyPowerTW\\", "")
+        short = string.gsub(short, "Interface\\AddOns\\PallyPowerTW\\HD", "HD")
+        log("BuffIconSmall[" .. i .. "]: " .. short)
+      end
+    end
+  else
+    log("BuffIconSmall: nil")
+  end
+  
+  -- Current Buffs
+  log("")
+  log("--- Current Buffs (UnitBuff) ---")
+  local i = 1
+  while UnitBuff("player", i) do
+    local icon = UnitBuff("player", i)
+    if icon then
+      local short = string.gsub(icon, "Interface\\Icons\\", "")
+      log("Buff " .. i .. ": " .. short)
+      
+      -- Check if it matches any BuffIcon
+      for idx = 0, 9 do
+        if BuffIcon and BuffIcon[idx] then
+          local checkIcon = string.gsub(BuffIcon[idx], "Interface\\AddOns\\PallyPowerTW\\Icons\\", "Interface\\Icons\\")
+          checkIcon = string.gsub(checkIcon, "Interface\\AddOns\\PallyPowerTW\\HDIcons\\", "Interface\\Icons\\")
+          if checkIcon == icon then
+            log("  -> Matches BuffIcon[" .. idx .. "]")
+          end
+        end
+      end
+    end
+    i = i + 1
+    if i > 40 then break end
+  end
+  
+  -- Spell Name Tests
+  log("")
+  log("--- PallyPower_GetBuffIDFromSpellName Tests ---")
+  if PallyPower_GetBuffIDFromSpellName then
+    local tests = {
+      "Blessing of Wisdom",
+      "Greater Blessing of Wisdom",
+      "Blessing of Kings",
+      "Greater Blessing of Kings",
+      "Blessing of Might",
+      "Greater Blessing of Might",
+      "Blessing of Salvation",
+      "Greater Blessing of Salvation",
+      "Blessing of Light",
+      "Greater Blessing of Light",
+      "Blessing of Sanctuary",
+      "Greater Blessing of Sanctuary",
+    }
+    
+    for _, spell in ipairs(tests) do
+      local result = PallyPower_GetBuffIDFromSpellName(spell)
+      log(spell .. " -> " .. tostring(result))
+    end
+  else
+    log("PallyPower_GetBuffIDFromSpellName: nil")
+  end
+  
+  -- Scan Info
+  log("")
+  log("--- Scan Info (Player) ---")
+  if PP_ScanInfo then
+    local class = UnitClass("player")
+    local cid = PallyPower_GetClassID and PallyPower_GetClassID(class)
+    if cid and PP_ScanInfo[cid] and PP_ScanInfo[cid]["player"] then
+      log("Found scan data for player:")
+      for k, v in pairs(PP_ScanInfo[cid]["player"]) do
+        if type(k) == "number" then
+          log("  Buff index " .. k .. ": " .. tostring(v))
+        end
+      end
+    else
+      log("No scan data for player")
+      if cid then log("  ClassID: " .. cid) end
+    end
+  else
+    log("PP_ScanInfo: nil")
+  end
+  
+  -- Nampower Tests
+  if PP_NampowerAPI then
+    log("")
+    log("--- Nampower Tests ---")
+    
+    if GetUnitField then
+      local auras = GetUnitField("player", "aura")
+      if auras then
+        log("GetUnitField('player', 'aura') returned " .. table.getn(auras) .. " entries")
+        for i = 1, math.min(10, table.getn(auras)) do
+          if auras[i] and auras[i] > 0 then
+            log("  Aura[" .. i .. "]: SpellID " .. auras[i])
+            if GetSpellRecField then
+              local name = GetSpellRecField(auras[i], "name")
+              if name then
+                log("    Name: " .. name)
+              end
+            end
+          end
+        end
+      else
+        log("GetUnitField('player', 'aura') returned nil")
+      end
+    else
+      log("GetUnitField: nil")
+    end
+    
+    if GetSpellRecField then
+      log("")
+      log("GetSpellRecField test on known spell IDs:")
+      local testIds = {20911, 25899, 1038, 25782, 20217, 20911}
+      for _, id in ipairs(testIds) do
+        local name = GetSpellRecField(id, "name")
+        log("  SpellID " .. id .. ": " .. tostring(name))
+      end
+    else
+      log("GetSpellRecField: nil")
+    end
+  end
+  
+  log("")
+  log("=== END DEBUG ===")
+  
+  if OGAALogger and OGAALogger.AddMessage then
+    DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00PallyPower debug output sent to _OGAALogger|r")
+  else
+    DEFAULT_CHAT_FRAME:AddMessage("|cffff9900PallyPower debug output (install _OGAALogger for copy/paste)|r")
+  end
 end
