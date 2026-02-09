@@ -3214,6 +3214,27 @@ function PallyPowerBuffButton_OnClick(btn, mousebtn)
     -- Track failure reasons for better error messages
     local failureReasons = {}
     
+    -- Check for reagents if trying to cast Greater Blessing (LeftButton on Greater mode)
+    local missingReagent = nil
+    if not RegularBlessings and mousebtn == "LeftButton" and AllPallys[UnitName("player")][btn.buffID] then
+        if AllPallys[UnitName("player")][btn.buffID]["id"] ~= AllPallys[UnitName("player")][btn.buffID]["idsmall"] then
+            -- This is a Greater Blessing, check for Symbol of Kings (Wisdom, Kings, Might need it)
+            if btn.buffID == 0 or btn.buffID == 1 or btn.buffID == 4 then
+                local count = GetItemCount("Symbol of Kings")
+                if count == 0 then
+                    missingReagent = "Symbol of Kings"
+                end
+            end
+        end
+    end
+    
+    if missingReagent then
+        SpellStopTargeting()
+        TargetLastTarget()
+        PallyPower_ShowFeedback("Out of " .. missingReagent, 1, 0, 0) -- Red color
+        return
+    end
+    
     -- Sort units by proximity if UnitXP is available, otherwise use original iteration
     local sortedUnits
     if PP_PerUser and PP_UnitXPDllLoaded and PP_PerUser.useunitxp_sp3 then
