@@ -3220,7 +3220,7 @@ function PallyPowerBuffButton_OnClick(btn, mousebtn)
         if AllPallys[UnitName("player")][btn.buffID]["id"] ~= AllPallys[UnitName("player")][btn.buffID]["idsmall"] then
             -- This is a Greater Blessing, check for Symbol of Kings (Wisdom, Kings, Might need it)
             if btn.buffID == 0 or btn.buffID == 1 or btn.buffID == 4 then
-                local count = GetItemCount("Symbol of Kings")
+                local count = PP_Symbols
                 if count == 0 then
                     missingReagent = "Symbol of Kings"
                 end
