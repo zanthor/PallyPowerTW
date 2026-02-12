@@ -4,8 +4,21 @@ local initialized = false
 local PP_SuperWoW = SetAutoloot and true or false
 local PP_TrackedGUIDs = {}
 
--- Nampower API detection - will be set during initialization
+-- Nampower API detection
 local PP_NampowerAPI = false
+local PP_NampowerVersion = nil
+local PP_NAMPOWER_MIN_VERSION = {2, 27, 2}
+
+if GetNampowerVersion then
+    local major, minor, patch = GetNampowerVersion()
+    patch = patch or 0
+    PP_NampowerVersion = string.format("%d.%d.%d", major, minor, patch)
+    if major > PP_NAMPOWER_MIN_VERSION[1]
+        or (major == PP_NAMPOWER_MIN_VERSION[1] and minor > PP_NAMPOWER_MIN_VERSION[2])
+        or (major == PP_NAMPOWER_MIN_VERSION[1] and minor == PP_NAMPOWER_MIN_VERSION[2] and patch >= PP_NAMPOWER_MIN_VERSION[3]) then
+        PP_NampowerAPI = true
+    end
+end
 
 PALLYPOWER_GREATERBLESSINGDURATION = 30 * 60
 PALLYPOWER_NORMALBLESSINGDURATION = 10 * 60
@@ -332,8 +345,21 @@ function PallyPower_SortUnitsByProximity(unitsTable, maxRange)
 end
 
 function PallyPower_InitConfig()
-    -- Detect Nampower API
-    PP_NampowerAPI = GetUnitField ~= nil
+    -- Delayed Nampower status announcement (10s so it appears after login spam)
+    local announceFrame = CreateFrame("Frame")
+    announceFrame.elapsed = 0
+    announceFrame:SetScript("OnUpdate", function()
+        this.elapsed = this.elapsed + arg1
+        if this.elapsed >= 10 then
+            if PP_NampowerAPI then
+                DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00PallyPower:|r Nampower " .. PP_NampowerVersion .. " detected - using enhanced API", 0.5, 1, 0.5)
+            elseif PP_NampowerVersion then
+                local minVer = PP_NAMPOWER_MIN_VERSION[1] .. "." .. PP_NAMPOWER_MIN_VERSION[2] .. "." .. PP_NAMPOWER_MIN_VERSION[3]
+                DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000PallyPower:|r Nampower " .. PP_NampowerVersion .. " is too old (need " .. minVer .. "+) - using fallback", 1, 0.5, 0.5)
+            end
+            this:SetScript("OnUpdate", nil)
+        end
+    end)
     
     if PP_PerUser.scalemain == nil then PP_PerUser.scalemain = 1 end
     if PP_PerUser.scalebar == nil then PP_PerUser.scalebar = 1 end
