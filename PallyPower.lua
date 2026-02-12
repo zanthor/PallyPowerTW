@@ -529,16 +529,16 @@ function PallyPower_AdjustIcons()
     else
         RegularBlessings = false
         BlessingIcon[0] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_GreaterBlessingofWisdom"
-        BlessingIcon[1] = "Interface\\"..icons_prefix.."Icons\\Spell_Magic_GreaterBlessingofKings"
+        BlessingIcon[1] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_GreaterBlessingofKings"
         BlessingIcon[2] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_GreaterBlessingofSalvation"
         BlessingIcon[3] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_GreaterBlessingofLight"
-        BlessingIcon[4] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_GreaterBlessingofKings"
+        BlessingIcon[4] = "Interface\\"..icons_prefix.."Icons\\Spell_Magic_GreaterBlessingofKings"
         BlessingIcon[5] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_GreaterBlessingofSanctuary"
         BuffIcon[0] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_GreaterBlessingofWisdom"
-        BuffIcon[1] = "Interface\\"..icons_prefix.."Icons\\Spell_Magic_GreaterBlessingofKings"
+        BuffIcon[1] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_GreaterBlessingofKings"
         BuffIcon[2] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_GreaterBlessingofSalvation"
         BuffIcon[3] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_GreaterBlessingofLight"
-        BuffIcon[4] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_GreaterBlessingofKings"
+        BuffIcon[4] = "Interface\\"..icons_prefix.."Icons\\Spell_Magic_GreaterBlessingofKings"
         BuffIcon[5] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_GreaterBlessingofSanctuary"
         BuffIcon[9] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_SealOfFury"
         BuffIconSmall[0] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_SealOfWisdom"
@@ -2732,7 +2732,7 @@ function PallyPower_NeedsBuff(class, test)
         --    return false
         --end
         -- no might for casters
-        if (class == 2 or class == 6 or class == 7) and test == 4 then --class == 5 or allow Might on Hunters
+        if (class == 2 or class == 6 or class == 7) and test == 1 then --class == 5 or allow Might on Hunters
             return false
         end
     end
@@ -2844,11 +2844,11 @@ function PallyPower_GetBuffIDFromSpellName(spellName)
         return 0
     elseif string.find(spellName, "Blessing of Wisdom") then
         return 0
-    -- Might (uses index 4 to match texture paths)
+    -- Might
     elseif string.find(spellName, "Greater Blessing of Might") then
-        return 4
+        return 1
     elseif string.find(spellName, "Blessing of Might") then
-        return 4
+        return 1
     -- Salvation
     elseif string.find(spellName, "Greater Blessing of Salvation") then
         return 2
@@ -2859,11 +2859,11 @@ function PallyPower_GetBuffIDFromSpellName(spellName)
         return 3
     elseif string.find(spellName, "Blessing of Light") then
         return 3
-    -- Kings (uses index 1 to match texture paths)
+    -- Kings
     elseif string.find(spellName, "Greater Blessing of Kings") then
-        return 1
+        return 4
     elseif string.find(spellName, "Blessing of Kings") then
-        return 1
+        return 4
     -- Sanctuary
     elseif string.find(spellName, "Greater Blessing of Sanctuary") then
         return 5
@@ -3161,6 +3161,22 @@ function PallyPowerBuffButton_OnClick(btn, mousebtn)
 
     if AllPallys[UnitName("player")][btn.buffID] == nil then return end
     PP_Debug("Casting " .. btn.buffID .. " on " .. btn.classID)
+    
+    -- Check mana before attempting to cast
+    local blessingType = PALLYPOWER_SMALLBLESSING
+    if (mousebtn == "LeftButton") then
+        if not RegularBlessings and AllPallys[UnitName("player")][btn.buffID]["id"] ~= AllPallys[UnitName("player")][btn.buffID]["idsmall"] then
+            blessingType = PALLYPOWER_GREATERBLESSING
+        end
+    end
+    
+    if not PallyPower_HasEnoughMana(btn.buffID, blessingType) then
+        SpellStopTargeting()
+        TargetLastTarget()
+        PallyPower_ShowFeedback("Not enough mana to cast blessing", 1, 0, 0)
+        return
+    end
+    
     if (mousebtn == "RightButton") then
         if GetSpellCooldown(AllPallys[UnitName("player")][btn.buffID]["idsmall"], BOOKTYPE_SPELL) < 1 then
             CastSpell(AllPallys[UnitName("player")][btn.buffID]["idsmall"], BOOKTYPE_SPELL)
@@ -3272,6 +3288,12 @@ function PallyPowerBuffButton_OnClick(btn, mousebtn)
             end
 
             -- Debug cast checks
+            -- Check mana before targeting
+            local blessingType = (mousebtn == "LeftButton" and not RegularBlessings and 
+                                 AllPallys[UnitName("player")][btn.buffID] and
+                                 AllPallys[UnitName("player")][btn.buffID]["id"] ~= AllPallys[UnitName("player")][btn.buffID]["idsmall"]) 
+                                 and PALLYPOWER_GREATERBLESSING or PALLYPOWER_SMALLBLESSING
+            local hasMana = PallyPower_HasEnoughMana(btn.buffID, blessingType)
             local canTarget = SpellCanTargetUnit(unit)
             local notDead = not UnitIsDeadOrGhost(unit)
             local hasLoS = PallyPower_CheckTargetLoS(unit)
@@ -3282,7 +3304,9 @@ function PallyPowerBuffButton_OnClick(btn, mousebtn)
             
             -- Track failure reason
             local failureReason = nil
-            if not canTarget then
+            if not hasMana then
+                failureReason = "not enough mana"
+            elseif not canTarget then
                 failureReason = "can't target"
             elseif not notDead then
                 failureReason = "dead/ghost"
@@ -3303,6 +3327,7 @@ function PallyPowerBuffButton_OnClick(btn, mousebtn)
             
             if OGAALogger and OGAALogger.AddMessage then
                 OGAALogger.AddMessage("PallyPower_Cast", "=== Cast Check for " .. unit .. " ===")
+                OGAALogger.AddMessage("PallyPower_Cast", "  Has Mana: " .. tostring(hasMana))
                 OGAALogger.AddMessage("PallyPower_Cast", "  SpellCanTargetUnit: " .. tostring(canTarget))
                 OGAALogger.AddMessage("PallyPower_Cast", "  Not Dead/Ghost: " .. tostring(notDead))
                 OGAALogger.AddMessage("PallyPower_Cast", "  Has LOS: " .. tostring(hasLoS))
@@ -3311,14 +3336,14 @@ function PallyPowerBuffButton_OnClick(btn, mousebtn)
                 OGAALogger.AddMessage("PallyPower_Cast", "  Found in recent: " .. tostring(foundInRecent))
                 OGAALogger.AddMessage("PallyPower_Cast", "  Not Recent Cast: " .. tostring(notRecent))
                 OGAALogger.AddMessage("PallyPower_Cast", "  Not Salv on Tank: " .. tostring(notSalvOnTank))
-                local allPass = canTarget and notDead and hasLoS and notRecent and notSalvOnTank
+                local allPass = hasMana and canTarget and notDead and hasLoS and notRecent and notSalvOnTank
                 OGAALogger.AddMessage("PallyPower_Cast", "  ALL CHECKS PASS: " .. tostring(allPass))
                 if failureReason then
                     OGAALogger.AddMessage("PallyPower_Cast", "  FAIL REASON: " .. failureReason)
                 end
             end
             
-            if canTarget and notDead and hasLoS and notRecent and notSalvOnTank then
+            if hasMana and canTarget and notDead and hasLoS and notRecent and notSalvOnTank then
                 PP_Debug("Trying to cast on " .. unit)
                 local blessing = GetNormalBlessings(UnitName("player"),btn.classID, stats.name)
                 if blessing ~= -1 and mousebtn == "RightButton" then
@@ -3409,7 +3434,9 @@ function PallyPowerBuffButton_OnClick(btn, mousebtn)
     
     -- Build helpful error message based on failure reasons
     local errorMsg = ""
-    if failureReasons["recast_blocked"] and table.getn(failureReasons["recast_blocked"]) > 0 then
+    if failureReasons["not enough mana"] and table.getn(failureReasons["not enough mana"]) > 0 then
+        errorMsg = "Not enough mana to cast blessing"
+    elseif failureReasons["recast_blocked"] and table.getn(failureReasons["recast_blocked"]) > 0 then
         local names = table.concat(failureReasons["recast_blocked"], ", ")
         errorMsg = "Recast blocked on " .. names .. " (hold Shift to bypass)"
     elseif failureReasons["out of range/LOS"] and table.getn(failureReasons["out of range/LOS"]) > 0 then

@@ -11,10 +11,10 @@ BINDING_NAME_SEALKEY = "Cast Seal Key"
 
 PallyPower_BlessingID = { };
 PallyPower_BlessingID[0] = "Wisdom";
-PallyPower_BlessingID[1] = "Kings";
+PallyPower_BlessingID[1] = "Might";
 PallyPower_BlessingID[2] = "Salvation";
 PallyPower_BlessingID[3] = "Light";
-PallyPower_BlessingID[4] = "Might";
+PallyPower_BlessingID[4] = "Kings";
 PallyPower_BlessingID[5] = "Sanctuary";
 
 PallyPower_AuraID = { };

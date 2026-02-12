@@ -11,10 +11,10 @@ if ( GetLocale() == "esES" ) then
     
     PallyPower_BlessingID = { };
     PallyPower_BlessingID[0] = "Sabiduría";
-    PallyPower_BlessingID[1] = "los Reyes";
+    PallyPower_BlessingID[1] = "Poder";
     PallyPower_BlessingID[2] = "Salvación";
     PallyPower_BlessingID[3] = "Luz";
-    PallyPower_BlessingID[4] = "Poder";
+    PallyPower_BlessingID[4] = "los Reyes";
     PallyPower_BlessingID[5] = "Santuario";
 
     PallyPower_AuraID = { };
