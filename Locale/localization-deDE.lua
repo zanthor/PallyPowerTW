@@ -11,10 +11,10 @@ if ( GetLocale() == "deDE" ) then
 
     PallyPower_BlessingID = { };
     PallyPower_BlessingID[0] = "Weisheit";
-    PallyPower_BlessingID[1] = "Macht";
+    PallyPower_BlessingID[1] = "Könige";
     PallyPower_BlessingID[2] = "Rettung";
     PallyPower_BlessingID[3] = "Licht";
-    PallyPower_BlessingID[4] = "Könige";
+    PallyPower_BlessingID[4] = "Macht";
     PallyPower_BlessingID[5] = "Refugium";
     
     PallyPower_AuraID = { };

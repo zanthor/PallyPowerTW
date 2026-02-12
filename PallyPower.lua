@@ -529,16 +529,16 @@ function PallyPower_AdjustIcons()
     else
         RegularBlessings = false
         BlessingIcon[0] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_GreaterBlessingofWisdom"
-        BlessingIcon[1] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_GreaterBlessingofKings"
+        BlessingIcon[1] = "Interface\\"..icons_prefix.."Icons\\Spell_Magic_GreaterBlessingofKings"
         BlessingIcon[2] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_GreaterBlessingofSalvation"
         BlessingIcon[3] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_GreaterBlessingofLight"
-        BlessingIcon[4] = "Interface\\"..icons_prefix.."Icons\\Spell_Magic_GreaterBlessingofKings"
+        BlessingIcon[4] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_GreaterBlessingofKings"
         BlessingIcon[5] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_GreaterBlessingofSanctuary"
         BuffIcon[0] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_GreaterBlessingofWisdom"
-        BuffIcon[1] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_GreaterBlessingofKings"
+        BuffIcon[1] = "Interface\\"..icons_prefix.."Icons\\Spell_Magic_GreaterBlessingofKings"
         BuffIcon[2] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_GreaterBlessingofSalvation"
         BuffIcon[3] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_GreaterBlessingofLight"
-        BuffIcon[4] = "Interface\\"..icons_prefix.."Icons\\Spell_Magic_GreaterBlessingofKings"
+        BuffIcon[4] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_GreaterBlessingofKings"
         BuffIcon[5] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_GreaterBlessingofSanctuary"
         BuffIcon[9] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_SealOfFury"
         BuffIconSmall[0] = "Interface\\"..icons_prefix.."Icons\\Spell_Holy_SealOfWisdom"
@@ -2732,7 +2732,7 @@ function PallyPower_NeedsBuff(class, test)
         --    return false
         --end
         -- no might for casters
-        if (class == 2 or class == 6 or class == 7) and test == 1 then --class == 5 or allow Might on Hunters
+        if (class == 2 or class == 6 or class == 7) and test == 4 then --class == 5 or allow Might on Hunters
             return false
         end
     end
@@ -2844,11 +2844,11 @@ function PallyPower_GetBuffIDFromSpellName(spellName)
         return 0
     elseif string.find(spellName, "Blessing of Wisdom") then
         return 0
-    -- Kings
-    elseif string.find(spellName, "Greater Blessing of Kings") then
-        return 1
-    elseif string.find(spellName, "Blessing of Kings") then
-        return 1
+    -- Might (uses index 4 to match texture paths)
+    elseif string.find(spellName, "Greater Blessing of Might") then
+        return 4
+    elseif string.find(spellName, "Blessing of Might") then
+        return 4
     -- Salvation
     elseif string.find(spellName, "Greater Blessing of Salvation") then
         return 2
@@ -2859,28 +2859,16 @@ function PallyPower_GetBuffIDFromSpellName(spellName)
         return 3
     elseif string.find(spellName, "Blessing of Light") then
         return 3
-    -- Might / Sanctuary (index depends on whether using regular or greater blessings)
-    elseif string.find(spellName, "Greater Blessing of Might") then
-        -- When using Greater Blessings, Might is at index 4
-        -- When using Regular Blessings, Might shares index 1 with Kings
-        if not RegularBlessings then
-            return 4
-        else
-            return 1
-        end
-    elseif string.find(spellName, "Blessing of Might") then
-        if not RegularBlessings then
-            return 4
-        else
-            return 1
-        end
-    -- Sanctuary - check Greater first!
+    -- Kings (uses index 1 to match texture paths)
+    elseif string.find(spellName, "Greater Blessing of Kings") then
+        return 1
+    elseif string.find(spellName, "Blessing of Kings") then
+        return 1
+    -- Sanctuary
     elseif string.find(spellName, "Greater Blessing of Sanctuary") then
-        -- Greater Blessing of Sanctuary is at index 5
         return 5
     elseif string.find(spellName, "Blessing of Sanctuary") then
-        -- Regular Blessing of Sanctuary is always at index 4
-        return 4
+        return 5
     -- Protection
     elseif string.find(spellName, "Blessing of Protection") then
         return 5
